@@ -1,0 +1,22 @@
+version 3
+
+tasks: 
+  build_debug:
+    cmds:
+      - odin build tadeovk -out=bin/tadeovk-debug -o:none -debug
+    aliases:
+      - bd
+    silent: true
+    sources:
+      - ./tadeovk/**/*.odin
+    generates: bin/tadeovk-debug
+
+  debug: 
+    deps: 
+      - build_debug
+    cmds: gdb bin/tadeovk-debug
+    aliases:
+      - d
+    silent: true
+    method: none
+    
