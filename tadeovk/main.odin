@@ -106,7 +106,7 @@ main :: proc() {
 
 	for !glfw.WindowShouldClose(window) {
 		glfw.PollEvents()
-		draw_frame(&ctx, vertices[:], indices[:])
+		draw_frame(&ctx)
 	}
 
 	vk.DeviceWaitIdle(device)
@@ -117,7 +117,7 @@ main :: proc() {
 }
 
 
-draw_frame :: proc(using ctx: ^Context, vertices: []Vertex, indices: []u16) {
+draw_frame :: proc(using ctx: ^Context) {
 	vk.WaitForFences(device, 1, &in_flight[curr_frame], true, max(u64))
 	image_index: u32
 
@@ -130,13 +130,22 @@ draw_frame :: proc(using ctx: ^Context, vertices: []Vertex, indices: []u16) {
 		&image_index,
 	)
 	if res == .ERROR_OUT_OF_DATE_KHR || res == .SUBOPTIMAL_KHR || framebuffer_resized {
+		if res == .ERROR_OUT_OF_DATE_KHR {
+			fmt.println("Recreate swapchain because ERROR_OUT_OF_DATE_KHR")
+		} else if res == .SUBOPTIMAL_KHR {
+			fmt.println("Recreate swapchain because SUBOPTIMAL_KHR")
+		} else {
+			fmt.println("Recreate swapchain because framebuffer_resized")
+		}
+
 		framebuffer_resized = false
 		recreate_swap_chain(ctx)
 		return
 	} else if res != .SUCCESS {
-		fmt.eprintln("Error failed to acquire swapchain image")
+		fmt.eprintf("Error: Failed tp acquire swap chain image!\n")
 		os.exit(1)
 	}
+
 	vk.ResetFences(device, 1, &in_flight[curr_frame])
 	vk.ResetCommandBuffer(command_buffers[curr_frame], {})
 	record_command_buffer(ctx, command_buffers[curr_frame], image_index)
@@ -145,7 +154,7 @@ draw_frame :: proc(using ctx: ^Context, vertices: []Vertex, indices: []u16) {
 	submit_info.sType = .SUBMIT_INFO
 
 	wait_semaphores := [?]vk.Semaphore{image_available[curr_frame]}
-	wait_stages := [?]vk.PipelineStageFlags{vk.PipelineStageFlags{.COLOR_ATTACHMENT_OUTPUT}}
+	wait_stages := [?]vk.PipelineStageFlags{{.COLOR_ATTACHMENT_OUTPUT}}
 	submit_info.waitSemaphoreCount = 1
 	submit_info.pWaitSemaphores = &wait_semaphores[0]
 	submit_info.pWaitDstStageMask = &wait_stages[0]
@@ -158,7 +167,7 @@ draw_frame :: proc(using ctx: ^Context, vertices: []Vertex, indices: []u16) {
 
 	if res := vk.QueueSubmit(queues[.Graphics], 1, &submit_info, in_flight[curr_frame]);
 	   res != .SUCCESS {
-		fmt.eprintln("Error: Failed to submit draw command buffer")
+		fmt.eprintf("Error: Failed to submit draw command buffer!\n")
 		os.exit(1)
 	}
 
@@ -173,14 +182,14 @@ draw_frame :: proc(using ctx: ^Context, vertices: []Vertex, indices: []u16) {
 	present_info.pImageIndices = &image_index
 	present_info.pResults = nil
 
-	if res := vk.QueuePresentKHR(queues[.Present], &present_info); res != .SUCCESS {
-		fmt.eprintln("Error: Failed to present swapchain image")
-		os.exit(1)
+	if vk.QueuePresentKHR(queues[.Present], &present_info) != .SUCCESS {
+		fmt.eprintf("Error: Failed to present.")
+		return
 	}
+
 	curr_frame = (curr_frame + 1) % MAX_FRAMES_IN_FLIGHT
-
-
 }
+
 
 init_window :: proc(using ctx: ^Context) {
 	glfw.Init()
@@ -195,8 +204,8 @@ init_window :: proc(using ctx: ^Context) {
 
 framebuffer_size_callback :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
 	using ctx := cast(^Context)glfw.GetWindowUserPointer(window)
-	context = runtime.default_context()
-	fmt.printfln("Resized to size %d x %d", width, height)
+	// context = runtime.default_context()
+	// fmt.printfln("Resized to size %d x %d", width, height)
 	framebuffer_resized = true
 }
 
@@ -212,11 +221,9 @@ init_vulkan :: proc(using ctx: ^Context, vertices: []Vertex, indices: []u16) {
 	vk.load_proc_addresses(get_proc_address)
 
 	extensions := get_extensions()
-	for &ext in extensions {
-		fmt.println(cstring(&ext.extensionName[0]))
-	}
-
-	fmt.println(ctx)
+	// for &ext in extensions {
+	// 	fmt.println(cstring(&ext.extensionName[0]))
+	// }
 	create_surface(ctx)
 	get_suitable_device(ctx)
 	find_queue_families(ctx)
@@ -232,7 +239,9 @@ init_vulkan :: proc(using ctx: ^Context, vertices: []Vertex, indices: []u16) {
 		vk.GetDeviceQueue(device, u32(queue_indices[f]), 0, &q)
 	}
 
-	create_swap_chain(ctx)
+	width, height := choose_swap_chain_size(ctx)
+	fmt.println("Create swapchain with ", width, "x", height)
+	create_swap_chain(ctx, width, height)
 	create_image_views(ctx)
 	create_graphics_pipeline(ctx, "shader.vert", "shader.frag")
 	create_framebuffers(ctx)
@@ -258,12 +267,7 @@ deinit_vulkan :: proc(using ctx: ^Context) {
 	vk.DestroyPipelineLayout(device, pipeline.layout, nil)
 	vk.DestroyRenderPass(device, pipeline.render_pass, nil)
 
-	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
-		vk.DestroySemaphore(device, image_available[i], nil)
-		vk.DestroySemaphore(device, render_finished[i], nil)
-		vk.DestroyFence(device, in_flight[i], nil)
-
-	}
+	cleanup_sync_objects(ctx)
 	vk.DestroyCommandPool(device, command_pool, nil)
 
 	vk.DestroyDevice(device, nil)
@@ -294,11 +298,6 @@ create_instance :: proc(using ctx: ^Context) {
 		vk.EnumerateInstanceLayerProperties(&layer_count, nil)
 		layers := make([]vk.LayerProperties, layer_count)
 		vk.EnumerateInstanceLayerProperties(&layer_count, raw_data(layers))
-
-		for &layer in layers {
-			fmt.println(cstring(&layer.layerName[0]))
-		}
-
 		outer: for name in VALIDATION_LAYERS {
 			for &layer in layers {
 				if name == cstring(&layer.layerName[0]) do continue outer
@@ -474,31 +473,27 @@ choose_present_mode :: proc(using ctx: ^Context) -> vk.PresentModeKHR {
 }
 
 
-choose_swap_extent :: proc(using ctx: ^Context) -> vk.Extent2D {
-	if swap_chain.support.capabilities.currentExtent.width != max(u32) {
-		return swap_chain.support.capabilities.currentExtent
-	} else {
-		width, height := glfw.GetFramebufferSize(window)
-		extent := vk.Extent2D{u32(width), u32(height)}
-		extent.width = clamp(
-			extent.width,
-			swap_chain.support.capabilities.minImageExtent.width,
-			swap_chain.support.capabilities.maxImageExtent.width,
-		)
-		extent.height = clamp(
-			extent.width,
-			swap_chain.support.capabilities.minImageExtent.height,
-			swap_chain.support.capabilities.maxImageExtent.height,
-		)
-		return extent
-	}
+choose_swap_chain_size :: proc(using ctx: ^Context) -> (width: u32, height: u32) {
+	w, h := glfw.GetFramebufferSize(window)
+	width = clamp(
+		u32(w),
+		swap_chain.support.capabilities.minImageExtent.width,
+		swap_chain.support.capabilities.maxImageExtent.width,
+	)
+	height = clamp(
+		u32(h),
+		swap_chain.support.capabilities.minImageExtent.height,
+		swap_chain.support.capabilities.maxImageExtent.height,
+	)
+	return
 }
 
-create_swap_chain :: proc(using ctx: ^Context) {
+create_swap_chain :: proc(using ctx: ^Context, width: u32, height: u32) {
 	using ctx.swap_chain.support
 	swap_chain.format = choose_surface_format(ctx)
 	swap_chain.present_mode = choose_present_mode(ctx)
-	swap_chain.extent = choose_swap_extent(ctx)
+	// swap_chain.extent = 
+	swap_chain.extent = vk.Extent2D{width, height}
 	swap_chain.image_count = capabilities.minImageCount + 1
 	if capabilities.maxImageCount > 0 && swap_chain.image_count > capabilities.maxImageCount {
 		swap_chain.image_count = capabilities.maxImageCount
@@ -971,10 +966,13 @@ record_command_buffer :: proc(using ctx: ^Context, buffer: vk.CommandBuffer, ima
 	render_pass_info.renderPass = pipeline.render_pass
 	render_pass_info.framebuffer = swap_chain.framebuffers[image_index]
 	render_pass_info.renderArea.offset = {0, 0}
-	render_pass_info.renderArea.extent = swap_chain.extent
+	render_pass_info.renderArea.extent = vk.Extent2D {
+		swap_chain.extent.width,
+		swap_chain.extent.height,
+	}
 
 	clear_color: vk.ClearValue
-	clear_color.color.float32 = [4]f32{0.0, 0.0, 0.4, 1.0}
+	clear_color.color.float32 = [4]f32{0.0, 0.0, 0.1, 0.3}
 	render_pass_info.clearValueCount = 1
 	render_pass_info.pClearValues = &clear_color
 
@@ -1038,19 +1036,34 @@ create_sync_objects :: proc(using ctx: ^Context) {
 	}
 }
 
+cleanup_sync_objects :: proc(using ctx: ^Context) {
+	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
+		vk.DestroySemaphore(device, image_available[i], nil)
+		vk.DestroySemaphore(device, render_finished[i], nil)
+		vk.DestroyFence(device, in_flight[i], nil)
+	}
+}
+
 recreate_swap_chain :: proc(using ctx: ^Context) {
 	width, height := glfw.GetFramebufferSize(window)
 	for width == 0 && height == 0 {
 		width, height = glfw.GetFramebufferSize(window)
 		glfw.WaitEvents()
 	}
+
 	vk.DeviceWaitIdle(device)
+	query_swap_chain_details(ctx, ctx.physical_device)
+	fmt.println("recreate swap chain with ", width, height)
+	// recreate sync objects, because otherwise, some might be signalled already and it is all messed up from what i understand
+	cleanup_sync_objects(ctx)
+	create_sync_objects(ctx)
+
 	cleanup_swap_chain(ctx)
-	create_swap_chain(ctx)
+	create_swap_chain(ctx, u32(width), u32(height))
+
 	create_image_views(ctx)
 	create_framebuffers(ctx)
 }
-
 
 cleanup_swap_chain :: proc(using ctx: ^Context) {
 	for f in swap_chain.framebuffers {
