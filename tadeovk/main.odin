@@ -1,6 +1,5 @@
 package tadeovk
 
-import "base:runtime"
 import "core:fmt"
 import "core:mem"
 import "core:os"
@@ -75,18 +74,6 @@ Vertex :: struct {
 
 DEVICE_EXTENSIONS := [?]cstring{"VK_KHR_swapchain"}
 VALIDATION_LAYERS := [?]cstring{"VK_LAYER_KHRONOS_validation"}
-
-
-Ent :: struct {
-	components: map[int]string,
-}
-
-main2 :: proc() {
-	ent: ^Ent = nil
-	ent.components[5] = "hello"
-	fmt.println(ent.components[5])
-	fmt.println("*** Never Reaches Here ***")
-}
 
 main :: proc() {
 	using ctx: Context
