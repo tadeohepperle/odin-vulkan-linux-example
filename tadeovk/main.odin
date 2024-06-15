@@ -668,26 +668,13 @@ create_graphics_pipeline :: proc(using ctx: ^Context, vs_name: string, fs_name: 
 	input_assembly.topology = .TRIANGLE_LIST
 	input_assembly.primitiveRestartEnable = false
 
-	viewport := vk.Viewport {
-		x        = 0.0,
-		y        = 0.0,
-		width    = f32(swap_chain.extent.width),
-		height   = f32(swap_chain.extent.height),
-		minDepth = 0.0,
-		maxDepth = 1.0,
-	}
-
-	scissor := vk.Rect2D {
-		offset = {0, 0},
-		extent = swap_chain.extent,
-	}
 
 	viewport_state: vk.PipelineViewportStateCreateInfo
 	viewport_state.sType = .PIPELINE_VIEWPORT_STATE_CREATE_INFO
 	viewport_state.viewportCount = 1
-	viewport_state.pViewports = &viewport
+	viewport_state.pViewports = nil // &viewport // can be nil because set dynamically with vkCmdSetViewport, but viewportCount must still be 1
 	viewport_state.scissorCount = 1
-	viewport_state.pScissors = &scissor
+	viewport_state.pScissors = nil // &viewport  // can be nil because set dynamically with vkCmdSetScissor, but scissorCount must still be 1
 
 	rasterizer: vk.PipelineRasterizationStateCreateInfo
 	rasterizer.sType = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO
